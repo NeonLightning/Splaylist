@@ -6,6 +6,7 @@ import json
 import argparse
 import os
 import webbrowser
+import sys
 
 def validate_spotify_credentials(credentials):
     client_id, client_secret, redirect_uri = credentials
@@ -61,15 +62,32 @@ def get_current_track_info(spotify_client, args):
             track_name = current_track['item']['name']
             artist_name = current_track['item']['artists'][0]['name']
             playlist_id = current_track['context']['uri'].split(':')[-1]
-            playlist = spotify_client.playlist(playlist_id)
-            playlist_name = playlist['name']
-            return track_name, artist_name, playlist_id, playlist_name, args
+            try:
+                playlist = spotify_client.playlist(playlist_id)
+                playlist_name = playlist['name']
+                return track_name, artist_name, playlist_id, playlist_name, args
+            except spotipy.exceptions.SpotifyException as e:
+                if e.http_status == 404:
+                    playlist_not_found_message = f"{track_name}\n{artist_name}\n\nPLAYLIST NOT FOUND"
+                    display_osd("Splaylist", playlist_not_found_message, 4)  # Display the error message in a notification
+                else:
+                    # Suppress the error output by not printing anything
+                    pass
+                return track_name, artist_name, None, None, args
     return None, None, None, None, args
 
 
+
 def check_track_in_playlist(spotify_client, track_id, playlist_id):
-    playlist_tracks = spotify_client.playlist_tracks(playlist_id, fields='items(track(id))')['items']
-    return any(track['track']['id'] == track_id for track in playlist_tracks)
+    try:
+        playlist_tracks = spotify_client.playlist_tracks(playlist_id, fields='items(track(id))')['items']
+        return any(track['track']['id'] == track_id for track in playlist_tracks)
+    except spotipy.exceptions.SpotifyException as e:
+        if e.http_status == 404:
+            print("Playlist not found.")
+        else:
+            print("An error occurred:", e)
+        return False
 
 
 def check_track_liked(spotify_client, track_id):
@@ -98,16 +116,36 @@ def display_osd(title, message, timeout):
 
 
 def parse_command_line_args():
-    parser = argparse.ArgumentParser()
+    parser = argparse.ArgumentParser(add_help=False)
     group = parser.add_mutually_exclusive_group()
     group.add_argument("-a", "--add", action="store_true", help="Add the currently playing track to the playlist")
     group.add_argument("-r", "--remove", action="store_true", help="Remove the currently playing track from the playlist")
     group.add_argument("-l", "--like", action="store_true", help="Add the currently playing track to Liked Songs")
     group.add_argument("-dl", "--dislike", action="store_true", help="Remove the currently playing track from Liked Songs")
     parser.add_argument("-t", "--timeout", type=int, default=4, help="Set the duration for OSD display in seconds")
-    return parser.parse_args()
+    args, _ = parser.parse_known_args()
 
+    if '-?' in sys.argv:
+        show_help_message()
 
+    return args
+
+def show_help_message():
+    help_message = """
+    Usage: python Splaylist.py [options]
+
+    Options:
+      -a, --add         Add the currently playing track to the playlist
+      -r, --remove      Remove the currently playing track from the playlist
+      -l, --like        Add the currently playing track to Liked Songs
+      -dl, --dislike    Remove the currently playing track from Liked Songs
+      -t TIMEOUT, --timeout TIMEOUT
+                        Set the duration for OSD display in seconds
+      -?, --help        Show this help message and exit
+    """
+    easygui.msgbox(help_message, title="Splaylist Help")
+    sys.exit()
+    
 def main():
     # Install required packages if not already installed
     try:
@@ -143,53 +181,58 @@ def main():
     track_name, artist_name, playlist_id, playlist_name, args = get_current_track_info(sp, args)
     if track_name and artist_name:
         osd_title = f"{track_name}\n{artist_name}"
-        if playlist_id and playlist_name:
-            osd_message = f"{osd_title}\nPlaylist: {playlist_name}"
-            # Check if track is in the playlist
-            track_id = sp.current_user_playing_track()['item']['id']
+        osd_message = f"{osd_title}\nPlaylist: {playlist_name}"
+        # Check if track is in the playlist
+        track_id = sp.current_user_playing_track()['item']['id']
+        if playlist_id is not None:
+            try:
+                if check_track_in_playlist(sp, track_id, playlist_id):
+                    osd_message += "\nTrack is in the playlist."
+                else:
+                    osd_message += "\nTrack is not in the playlist."
+            except TypeError:
+                # Handle the TypeError when playlist_id is None
+                pass
+        # Check if track is liked
+        if check_track_liked(sp, track_id):
+            osd_message += "\nTrack is in Liked Songs playlist."
+        else:
+            osd_message += "\nTrack is not in Liked Songs playlist."
+        # Perform desired actions based on command-line arguments
+        if args.add:
+            # Check if track is already in the playlist
             if check_track_in_playlist(sp, track_id, playlist_id):
-                osd_message += "\nTrack is in the playlist."
+                osd_message = f"{track_name}\n{artist_name}\n\nTrack is already in the playlist:\n{playlist_name}"
             else:
-                osd_message += "\nTrack is not in the playlist."
+                add_track_to_playlist(sp, track_id, playlist_id)
+                osd_message = f"{track_name}\n{artist_name}\n\nAdded to:\n{playlist_name}"
+        elif args.remove:
+            # Check if track is in the playlist
+            if check_track_in_playlist(sp, track_id, playlist_id):
+                remove_track_from_playlist(sp, track_id, playlist_id)
+                osd_message = f"{track_name}\n{artist_name}\n\nRemoved from:\n{playlist_name}"
+            else:
+                osd_message = f"Track is not in the playlist:\n\n{osd_title}\n{playlist_name}"
+        elif args.like:
+            # Check if track is already liked
+            if check_track_liked(sp, track_id):
+                osd_message = f"{track_name}\n{artist_name}\n\nTrack is already in Liked Songs playlist."
+            else:
+                add_track_to_liked_songs(sp, track_id)
+                osd_message = f"{track_name}\n{artist_name}\n\nAdded to Liked Songs playlist."
+        elif args.dislike:
             # Check if track is liked
             if check_track_liked(sp, track_id):
-                osd_message += "\nTrack is in Liked Songs playlist."
+                remove_track_from_liked_songs(sp, track_id)
+                osd_message = f"{track_name}\n{artist_name}\n\nRemoved from Liked Songs playlist."
             else:
-                osd_message += "\nTrack is not in Liked Songs playlist."
-            # Perform desired actions based on command-line arguments
-            if args.add:
-                # Check if track is already in the playlist
-                if check_track_in_playlist(sp, track_id, playlist_id):
-                    osd_message = f"{track_name}\n{artist_name}\n\nTrack is already in the playlist:\n{playlist_name}"
-                else:
-                    add_track_to_playlist(sp, track_id, playlist_id)
-                    osd_message = f"{track_name}\n{artist_name}\n\nAdded to:\n{playlist_name}"
-            elif args.remove:
-                # Check if track is in the playlist
-                if check_track_in_playlist(sp, track_id, playlist_id):
-                    remove_track_from_playlist(sp, track_id, playlist_id)
-                    osd_message = f"{track_name}\n{artist_name}\n\nRemoved from:\n{playlist_name}"
-                else:
-                    osd_message = f"Track is not in the playlist:\n\n{osd_title}\n{playlist_name}"
-            elif args.like:
-                # Check if track is already liked
-                if check_track_liked(sp, track_id):
-                    osd_message = f"{track_name}\n{artist_name}\n\nTrack is already in Liked Songs playlist."
-                else:
-                    add_track_to_liked_songs(sp, track_id)
-                    osd_message = f"{track_name}\n{artist_name}\n\nAdded to Liked Songs playlist."
-            elif args.dislike:
-                # Check if track is liked
-                if check_track_liked(sp, track_id):
-                    remove_track_from_liked_songs(sp, track_id)
-                    osd_message = f"{track_name}\n{artist_name}\n\nRemoved from Liked Songs playlist."
-                else:
-                    osd_message = f"Track is not in Liked Songs playlist:\n\n{osd_title}"
-        else:
-            osd_message = "No Playlist"
-        display_osd("", osd_message, args.timeout)
+                osd_message = f"Track is not in Liked Songs playlist:\n\n{osd_title}"
+
+        if playlist_id is not None:  # Check if playlist_id is not None
+            display_osd("", osd_message, args.timeout)
     else:
         display_osd("Splaylist", "No track is currently playing.", args.timeout)
+
 
 
 if __name__ == "__main__":
