@@ -134,3 +134,23 @@ return
 F17 & Media_Play_Pause::
     RunSplaylist("-dl")
 return
+
+; Show hotkey popup when F18 + "?" are pressed
+F18 & ?::
+    HotkeyText =
+    (
+    HotkeF18 + Volume Up: Increase gain for all three sliders
+    Volume Down: Decrease gain for all 3 sliders
+    F24: Toggle output between speakers and headphones
+    F23: Toggle output for TV
+    F18 + Media Next: Seek forward in Spotify by 10s
+    F18 + Media Prev: Seek backward in Spotify by 10s
+    Media Stop: Display Spotify Song info
+    F18 + Media Stop: Add song to current playlist
+    F17 + Media Stop: Remove song from current playlist
+    F18 + Media Play/Pause: Like Current song
+    F17 + Media Play/Pause: Unlike Current song
+    )
+
+    MsgBox, %HotkeyText%
+return
