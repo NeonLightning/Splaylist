@@ -15,8 +15,11 @@ SetWorkingDir %A_ScriptDir%
 vmr := new VMR()
 vmr.login()
 
-OutputMode := 1  ; 1 for A1, 2 for A2
-OutputStrip8A3 := false
+; Get OutputMode value
+OutputMode := vmr.GetOutputMode()
+
+; Get OutputStrip8A3 value
+OutputStrip8A3 := vmr.GetOutputStrip8A3()
 
 ; Increase gain
 $Volume_Up::
@@ -58,7 +61,6 @@ $Volume_Down::
     Sleep 50
 return
 
-; Toggle output mode if F24 key is pressed
 F24::
     OutputMode := 3 - OutputMode  ; Toggle between 1 and 2
 
@@ -77,9 +79,6 @@ F24::
         vmr.strip[8].A1 := 1
         vmr.strip[8].A2 := 0
     }
-
-    Sleep 100
-return
 
 ; Toggle output for strip[8].A3 if F23 key is pressed
 F23::
