@@ -55,17 +55,17 @@ def setup_spotipy_client(credentials, cache_path):
     scope = "playlist-read-private playlist-read-collaborative playlist-modify-private playlist-modify-public user-read-playback-state user-read-currently-playing user-library-read"
     return spotipy.Spotify(auth_manager=SpotifyOAuth(client_id=client_id, client_secret=client_secret, redirect_uri=redirect_uri, scope=scope, cache_path=cache_path))
 
-def get_current_track_info(spotify_client, args):
-    if spotify_client:
-        current_track = spotify_client.current_user_playing_track()
+def get_current_track_info(sp, args):
+    if sp:
+        current_track = sp.current_user_playing_track()
         if current_track and current_track['is_playing']:
             track_name = current_track['item']['name']
             artist_name = current_track['item']['artists'][0]['name']
             playlist_id = current_track['context']['uri'].split(':')[-1]
             try:
-                playlist = spotify_client.playlist(playlist_id)
+                playlist = sp.playlist(playlist_id)
                 playlist_name = playlist['name']
-                return track_name, artist_name, playlist_id, playlist_name, args
+                return track_name, artist_name, playlist_id, playlist_name, args, current_track
             except spotipy.exceptions.SpotifyException as e:
                 if e.http_status == 404:
                     playlist_not_found_message = f"{track_name}\n{artist_name}\n\nPLAYLIST NOT FOUND"
@@ -73,15 +73,22 @@ def get_current_track_info(spotify_client, args):
                 else:
                     # Suppress the error output by not printing anything
                     pass
-                return track_name, artist_name, None, None, args
-    return None, None, None, None, args
-
+                return track_name, artist_name, None, None, args, current_track
+    return None, None, None, None, args, current_track
 
 
 def check_track_in_playlist(spotify_client, track_id, playlist_id):
     try:
-        playlist_tracks = spotify_client.playlist_tracks(playlist_id, fields='items(track(id))')['items']
-        return any(track['track']['id'] == track_id for track in playlist_tracks)
+        offset = 0
+        limit = 100
+        while True:
+            playlist_tracks = spotify_client.playlist_tracks(playlist_id, fields='items(track(id))', limit=limit, offset=offset)['items']
+            if not playlist_tracks:
+                break
+            if any(track['track']['id'] == track_id for track in playlist_tracks):
+                return True
+            offset += limit
+        return False
     except spotipy.exceptions.SpotifyException as e:
         if e.http_status == 404:
             print("Playlist not found.")
@@ -90,25 +97,26 @@ def check_track_in_playlist(spotify_client, track_id, playlist_id):
         return False
 
 
+
 def check_track_liked(spotify_client, track_id):
     response = spotify_client.current_user_saved_tracks_contains([track_id])
     return response[0]
 
 
-def add_track_to_playlist(spotify_client, track_id, playlist_id):
-    spotify_client.playlist_add_items(playlist_id, [track_id])
+def add_track_to_playlist(sp, track_id, playlist_id):
+    sp.playlist_add_items(playlist_id, [track_id])
 
 
-def remove_track_from_playlist(spotify_client, track_id, playlist_id):
-    spotify_client.playlist_remove_all_occurrences_of_items(playlist_id, [track_id])
+def remove_track_from_playlist(sp, track_id, playlist_id):
+    sp.playlist_remove_all_occurrences_of_items(playlist_id, [track_id])
 
 
-def add_track_to_liked_songs(spotify_client, track_id):
-    spotify_client.current_user_saved_tracks_add([track_id])
+def add_track_to_liked_songs(sp, track_id):
+    sp.current_user_saved_tracks_add([track_id])
 
 
-def remove_track_from_liked_songs(spotify_client, track_id):
-    spotify_client.current_user_saved_tracks_delete([track_id])
+def remove_track_from_liked_songs(sp, track_id):
+    sp.current_user_saved_tracks_delete([track_id])
 
 
 def display_osd(title, message, timeout):
@@ -121,8 +129,9 @@ def parse_command_line_args():
     group.add_argument("-a", "--add", action="store_true", help="Add the currently playing track to the playlist")
     group.add_argument("-r", "--remove", action="store_true", help="Remove the currently playing track from the playlist")
     group.add_argument("-l", "--like", action="store_true", help="Add the currently playing track to Liked Songs")
-    group.add_argument("-dl", "--dislike", action="store_true", help="Remove the currently playing track from Liked Songs")
+    group.add_argument("-d", "--dislike", action="store_true", help="Remove the currently playing track from Liked Songs")
     parser.add_argument("-t", "--timeout", type=int, default=4, help="Set the duration for OSD display in seconds")
+    parser.add_argument("-s", "--song", action="store_true", help="Set the duration for OSD display in seconds")
     args, _ = parser.parse_known_args()
 
     if '-?' in sys.argv:
@@ -138,7 +147,8 @@ def show_help_message():
       -a, --add         Add the currently playing track to the playlist
       -r, --remove      Remove the currently playing track from the playlist
       -l, --like        Add the currently playing track to Liked Songs
-      -dl, --dislike    Remove the currently playing track from Liked Songs
+      -d, --dislike     Remove the currently playing track from Liked Songs
+      -s, --song        output track.txt for current track/artists
       -t TIMEOUT, --timeout TIMEOUT
                         Set the duration for OSD display in seconds
       -?, --help        Show this help message and exit
@@ -158,8 +168,7 @@ def main():
         import spotipy
         import easygui
         import plyer
-        
-        
+
     # Get Spotify API credentials and cache path
     credentials, cache_path = get_spotify_credentials()
 
@@ -176,14 +185,14 @@ def main():
 
     # Get command-line arguments
     args = parse_command_line_args()
-    
+
     # Get and display the currently playing track
-    track_name, artist_name, playlist_id, playlist_name, args = get_current_track_info(sp, args)
+    track_name, artist_name, playlist_id, playlist_name, args, current_track = get_current_track_info(sp, args)
     if track_name and artist_name:
         osd_title = f"{track_name}\n{artist_name}"
         osd_message = f"{osd_title}\nPlaylist: {playlist_name}"
         # Check if track is in the playlist
-        track_id = sp.current_user_playing_track()['item']['id']
+        track_id = current_track['item']['id']
         if playlist_id is not None:
             try:
                 if check_track_in_playlist(sp, track_id, playlist_id):
@@ -227,13 +236,29 @@ def main():
                 osd_message = f"{track_name}\n{artist_name}\n\nRemoved from Liked Songs playlist."
             else:
                 osd_message = f"Track is not in Liked Songs playlist:\n\n{osd_title}"
-
-        if playlist_id is not None:  # Check if playlist_id is not None
-            display_osd("", osd_message, args.timeout)
+        elif args.song:
+            # Check if track information is available
+            if track_name is not None or artist_name is not None:
+                artists = current_track['item']['artists']
+                artist_names = [artist['name'] for artist in artists]
+                artist_names_str = ', '.join(artist_names)
+                sys.stdout = open('track.txt', 'w')
+                print(f"{track_name} - {artist_names_str}")
+                sys.stdout.close()
+            else:
+                sys.stdout = open('track.txt', 'w')
+                print("No track is currently playing.")
+                sys.stdout.close()
+        else:
+            if playlist_id is not None:  # Check if playlist_id is not None
+                display_osd("", osd_message, args.timeout)
     else:
-        display_osd("Splaylist", "No track is currently playing.", args.timeout)
-
-
+        if args.song:
+            sys.stdout = open('track.txt', 'w')
+            print("No track is currently playing.")
+            sys.stdout.close()
+        else:
+            display_osd("Splaylist", "No track is currently playing.", args.timeout)
 
 if __name__ == "__main__":
     main()
