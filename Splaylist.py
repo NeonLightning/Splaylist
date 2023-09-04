@@ -67,12 +67,6 @@ def get_current_track_info(sp, args):
                 playlist_name = playlist['name']
                 return track_name, artist_name, playlist_id, playlist_name, args, current_track
             except spotipy.exceptions.SpotifyException as e:
-                if e.http_status == 404:
-                    playlist_not_found_message = f"{track_name}\n{artist_name}\n\nPLAYLIST NOT FOUND"
-                    display_osd("Splaylist", playlist_not_found_message, 4)  # Display the error message in a notification
-                else:
-                    # Suppress the error output by not printing anything
-                    pass
                 return track_name, artist_name, None, None, args, current_track
     return None, None, None, None, args, current_track
 
@@ -123,21 +117,38 @@ def display_osd(title, message, timeout):
     notification.notify(title=title, message=message, timeout=timeout)
 
 
+import argparse
+import sys
+
 def parse_command_line_args():
     parser = argparse.ArgumentParser(add_help=False)
-    group = parser.add_mutually_exclusive_group()
+    group = parser.add_mutually_exclusive_group()  # Create a mutually exclusive argument group
+    
+    # Add individual arguments within the group
     group.add_argument("-a", "--add", action="store_true", help="Add the currently playing track to the playlist")
     group.add_argument("-r", "--remove", action="store_true", help="Remove the currently playing track from the playlist")
     group.add_argument("-l", "--like", action="store_true", help="Add the currently playing track to Liked Songs")
     group.add_argument("-d", "--dislike", action="store_true", help="Remove the currently playing track from Liked Songs")
+    
     parser.add_argument("-t", "--timeout", type=int, default=4, help="Set the duration for OSD display in seconds")
-    parser.add_argument("-s", "--song", action="store_true", help="Set the duration for OSD display in seconds")
+    
+    # -n and -s are not mutually exclusive
+    parser.add_argument("-n", "--name", action="store_true", help="Output the name alone to text")
+    parser.add_argument("-s", "--song", action="store_true", help="Output track.txt for current track/artist")
+    
     args, _ = parser.parse_known_args()
 
     if '-?' in sys.argv:
         show_help_message()
 
+    # Check for conflicting arguments
+    if args.remove and (args.add or args.like):
+        raise argparse.ArgumentError(None, "Conflicting arguments: -r cannot be used with -a or -l")
+    if args.like and args.dislike:
+        raise argparse.ArgumentError(None, "Conflicting arguments: -l and -d cannot be used together")
+
     return args
+
 
 def show_help_message():
     help_message = """
@@ -145,6 +156,7 @@ def show_help_message():
 
     Options:
       -a, --add         Add the currently playing track to the playlist
+      -n, --name        Output the name alone to text
       -r, --remove      Remove the currently playing track from the playlist
       -l, --like        Add the currently playing track to Liked Songs
       -d, --dislike     Remove the currently playing track from Liked Songs
@@ -188,10 +200,10 @@ def main():
 
     # Get and display the currently playing track
     track_name, artist_name, playlist_id, playlist_name, args, current_track = get_current_track_info(sp, args)
-    if track_name and artist_name:
-        osd_title = f"{track_name}\n{artist_name}"
-        osd_message = f"{osd_title}\nPlaylist: {playlist_name}"
-        # Check if track is in the playlist
+    osd_title = f"{track_name}\n{artist_name}"
+    osd_message = f"{osd_title}\nPlaylist: {playlist_name}"
+    # Check if track is in the playlist
+    if current_track is not None:
         track_id = current_track['item']['id']
         if playlist_id is not None:
             try:
@@ -236,29 +248,30 @@ def main():
                 osd_message = f"{track_name}\n{artist_name}\n\nRemoved from Liked Songs playlist."
             else:
                 osd_message = f"Track is not in Liked Songs playlist:\n\n{osd_title}"
-        elif args.song:
-            # Check if track information is available
-            if track_name is not None or artist_name is not None:
-                artists = current_track['item']['artists']
-                artist_names = [artist['name'] for artist in artists]
-                artist_names_str = ', '.join(artist_names)
-                sys.stdout = open('track.txt', 'w')
-                print(f"{track_name} - {artist_names_str}")
-                sys.stdout.close()
-            else:
-                sys.stdout = open('track.txt', 'w')
-                print("No track is currently playing.")
-                sys.stdout.close()
+                
+    if args.name:
+        # Check if track information is available
+        if track_name is not None or artist_name is not None:
+            artists = current_track['item']['artists']
+            artist_names = [artist['name'] for artist in artists]
+            artist_names_str = ', '.join(artist_names)
+            with open('names.txt', 'w', encoding="utf-8") as names_file:
+                names_file.write(f"{artist_names_str}\n")
         else:
-            if playlist_id is not None:  # Check if playlist_id is not None
-                display_osd("", osd_message, args.timeout)
-    else:
-        if args.song:
-            sys.stdout = open('track.txt', 'w')
-            print("No track is currently playing.")
-            sys.stdout.close()
+            pass
+
+    if args.song:
+        # Check if track information is available
+        if track_name is not None:
+            artists = current_track['item']['artists']
+            artist_names = [artist['name'] for artist in artists]
+            artist_names_str = ', '.join(artist_names)
+            with open('track.txt', 'w', encoding="utf-8") as track_file:
+                track_file.write(f"{track_name} - {artist_names_str}\n")
         else:
-            display_osd("Splaylist", "No track is currently playing.", args.timeout)
+            with open('track.txt', 'w', encoding="utf-8") as track_file:
+                track_file.write("No track is currently playing.\n")
+
 
 if __name__ == "__main__":
     main()

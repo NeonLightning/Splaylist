@@ -1,10 +1,51 @@
+#SingleInstance force
+#Include VMR.ahk
+#include Spotify.ahk
+
+spoofy := new Spotify
+
+If Not A_IsAdmin
+{
+    Run *RunAs "%A_AhkPath%" "%A_ScriptFullPath%"
+    ExitApp
+}
+
+#MaxThreadsPerHotkey 1
+
+SetWorkingDir %A_ScriptDir%
+
+vmr := new VMR()
+vmr.login()
+
+OutputMode := 1  ; 1 for A1, 2 for A2
+
 OSD(text, number)
 {
+    ; Read color values from the config.ini file
+    configFile := "config.ini"
+    textColor := ""
+    bgColor := ""
+
+    if FileExist(configFile)
+    {
+        IniRead, textColor, %configFile%, OSDSettings, TextColor
+        IniRead, bgColor, %configFile%, OSDSettings, BackgroundColor
+    }
+
+    ; If color values are not found in the config, use defaults
+    if (textColor = "")
+        textColor := "888800"
+    if (bgColor = "")
+        bgColor := "000000"
+
+    ; Destroy the previous GUI if it exists
+    Gui, Destroy
+
     ; Customize the OSD appearance and position
     Gui +AlwaysOnTop +ToolWindow +E0x20 -Caption -SysMenu -Owner
-    Gui, Color, 000000
+    Gui, Color, %bgColor%
     Gui, Font, s16, Fixedsys
-    Gui, Add, Text, x10 y10 h40 c888800, %text%
+    Gui, Add, Text, x10 y10 h40 c%textColor%, %text%
     Gui, Show, NoActivate x10 y10 h35, OSD
 
     SetTimer, RemoveToolTip, %number%
@@ -15,6 +56,7 @@ OSD(text, number)
     Gui, Destroy
     return
 }
+
 
 GainOsd(Strip6Gain, Strip7Gain, Strip8Gain)
 {
@@ -62,7 +104,7 @@ WaitForFileChange(file, timeout)
         if (A_TickCount - startTime >= timeout) {
             return
         }
-        Sleep 50  ; Adjust the sleep duration as needed
+        Sleep 10  ; Adjust the sleep duration as needed
     }
 }
 
@@ -72,26 +114,21 @@ ReadFileContents(file)
     return contents
 }
 
-#SingleInstance force
-#Include VMR.ahk
-#include Spotify.ahk
-
-spoofy := new Spotify
-
-If Not A_IsAdmin
-{
-    Run *RunAs "%A_AhkPath%" "%A_ScriptFullPath%"
-    ExitApp
+ToggleMute() {
+    mute1 := vmr.strip[8].mute
+    if (mute1 == 0) {
+        OSD("Muted.", 1000)
+		vmr.strip[6].mute := 1
+		vmr.strip[7].mute := 1
+		vmr.strip[8].mute := 1
+    } else {
+        OSD("Unmuted.", 1000)
+        vmr.strip[6].mute := 0
+        vmr.strip[7].mute := 0
+        vmr.strip[8].mute := 0
+    }
 }
 
-#MaxThreadsPerHotkey 1
-
-SetWorkingDir %A_ScriptDir%
-
-vmr := new VMR()
-vmr.login()
-
-OutputMode := 1  ; 1 for A1, 2 for A2
 
 ; Get OutputStrip8A3 value
 OutputStrip8A3 := vmr.GetOutputStrip8A4()
@@ -143,6 +180,7 @@ F24::
 OutputMode := 3 - OutputMode  ; Toggle between 1 and 2
 
 if (OutputMode = 2) {
+	   OSD("speakers on",500)
         vmr.strip[6].A1 := 0
         vmr.strip[6].A2 := 1
         vmr.strip[7].A1 := 0
@@ -150,6 +188,7 @@ if (OutputMode = 2) {
         vmr.strip[8].A1 := 0
         vmr.strip[8].A2 := 1
     } else {
+	   OSD("headphones on",500)
         vmr.strip[6].A1 := 1
         vmr.strip[6].A2 := 0
         vmr.strip[7].A1 := 1
@@ -165,11 +204,17 @@ return
 F23::
     OutputStrip8A3 := !OutputStrip8A3
 
-    if (OutputStrip8A3) {
-        vmr.strip[8].A3 := 1
-    } else {
-        vmr.strip[8].A3 := 0
-    }
+	if (OutputStrip8A3) {
+		OSD("tv on",500)
+		vmr.strip[6].A3 := 1
+		vmr.strip[7].A3 := 1
+		vmr.strip[8].A3 := 1
+	} else {
+		OSD("tv off",500)
+		vmr.strip[6].A3 := 0
+		vmr.strip[7].A3 := 0
+		vmr.strip[8].A3 := 0
+	}
 
     Sleep 100
 return
@@ -196,7 +241,17 @@ RunSplaylist(Arguments := "")
 
 ; Media stop key
 Media_Stop::
-    RunSplaylist()
+    RunSplaylist("-s")
+    WaitForFileChange("track.txt", 7000)  ; Wait for file change with a timeout
+    OutputText := ReadFileContents("track.txt")
+    if (OutputText = "")
+    {
+        OSD("No track is currently playing.", 2000)
+    }
+    else
+    {
+        OSD(OutputText, 2000)
+    }
 return
 
 ; F18 + Media stop key
@@ -218,10 +273,24 @@ F17 & Media_Play_Pause::
 return
 
 $Media_Next::
-    spoofy.Player.NextTrack()
+	spoofy.Next()
+Return
+
+$Media_Prev::
+	spoofy.Previous()
+Return
+
+F16 & Media_Stop::
+    vmr.command.restart()
+    OSD("Audio Engine Restarted", 2000)
+return
+
+
+Shift & Media_Next::
+    spoofy.Next()
     Sleep 500
     RunSplaylist("-s")
-    WaitForFileChange("track.txt", 7000)  ; Wait for file change with a timeout of 5000 milliseconds (5 seconds)
+    WaitForFileChange("track.txt", 7000)  ; Wait for file change with a timeout
     OutputText := ReadFileContents("track.txt")
     if (OutputText = "")
     {
@@ -233,25 +302,12 @@ $Media_Next::
     }
 return
 
-$Media_Prev::
-    global pressCount  ; Declare pressCount as a global variable to remember its value across function calls
-
-    if (pressCount >= 2)  ; Check if the button is pressed once or more
-    {
-		spoofy.Player.LastTrack()
-        Sleep 199
-        RunSplaylist("-s")
-        WaitForFileChange("track.txt", 7000)  ; Wait for file change with a timeout of 7000 milliseconds (7 seconds)
-        SetTimer, ResetPressCount, -500  ; Reset pressCount after 200ms
-    }
-    else
-    {
-		spoofy.Player.LastTrack()
-        Sleep 100
-    }
-
-    pressCount++  ; Increment pressCount each time the hotkey is triggered
-
+Shift & Media_Prev::
+	spoofy.Previous()
+     Sleep 200
+     RunSplaylist("-s")
+     WaitForFileChange("track.txt", 7000)  ; Wait for file change with a timeout
+	 
     OutputText := ReadFileContents("track.txt")
     if (OutputText = "")
     {
@@ -261,6 +317,14 @@ $Media_Prev::
     {
         OSD(OutputText, 2000)
     }
+return
+
+Volume_Mute::
+    ToggleMute()
+return
+
+Media_Play_Pause::
+	spoofy.TogglePlay()
 return
 
 ResetPressCount:
